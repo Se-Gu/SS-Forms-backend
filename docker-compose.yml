@@ -1,14 +1,17 @@
 version: '3'
-
 services:
-  flask-app:
-    build: .
-    ports:
-      - '5000:5000'
-    depends_on:
-      - db
-
-  db:
-    image: mongo
+  mongodb:
+    image: mongo:latest
     ports:
       - '27017:27017'
+    volumes:
+      - mongo_data:/data/db
+  backend:
+    build:
+      context: .
+    ports:
+      - 5000:5000
+    depends_on:
+      - mongodb
+volumes:
+  mongo_data:

@@ -1,5 +1,6 @@
 from pymongo import MongoClient
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, get_jwt_identity, jwt_required
 import datetime
 import hashlib
@@ -7,15 +8,15 @@ from functools import wraps
 from jwt import decode, InvalidTokenError, ExpiredSignatureError
 
 app = Flask(__name__)
+CORS(app)
 jwt = JWTManager(app)
 app.config['JWT_SECRET_KEY'] = '38dd56f56d405e02ec0ba4be4607eaab'
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = datetime.timedelta(days=1)
 
-client = MongoClient('mongodb://localhost:27017')
-db = client['SS-Forms']
+client = MongoClient('mongodb://mongodb:27017/')
+db = client['user_forms']
 users_collection = db['users']
 texts_collection = db['texts']
-
 
 def admin_required(f):
     @wraps(f)
@@ -41,11 +42,20 @@ def admin_required(f):
 
     return decorated_function
 
+@app.route('/api/users/admin', methods=['POST'])
+def admin_register():
+    new_user = request.get_json()
+    new_user['password'] = hashlib.sha256(new_user['password'].encode('utf-8')).hexdigest()
+    new_user['isAdmin'] = True
+    users_collection.insert_one(new_user)
+    return jsonify({'msg': 'Admin user created successfully'}), 201
+
 
 @app.route('/api/users', methods=['POST'])
 def register():
     new_user = request.get_json()
     new_user['password'] = hashlib.sha256(new_user['password'].encode('utf-8')).hexdigest()
+    new_user['isAdmin'] = False
     doc = users_collection.find_one({'username': new_user['username']})
     if not doc:
         users_collection.insert_one(new_user)
@@ -58,9 +68,14 @@ def register():
 def get_users():
     result = users_collection.find()
     data = [
-        {'_id': str(doc['_id']), 'username': doc['username'], 'isAdmin': doc['isAdmin'], 'password': doc['password']}
-        for doc in result]
+        {'_id': str(doc['_id']),
+         'username': doc['username'],
+         'isAdmin': doc.get('isAdmin', False)}  # Use doc.get() to handle missing 'isAdmin' field
+        for doc in result
+    ]
     return jsonify(data)
+
+
 
 
 @app.route("/api/login", methods=["POST"])
@@ -76,12 +91,12 @@ def login():
         if encrpted_password == user_from_db['password']:
             # Create JWT Access Token
             access_token = create_access_token(identity=user_from_db['username'])  # create jwt token
-            # Return Token
-            return jsonify(access_token=access_token), 200
+            # Return Token and isAdmin status
+            return jsonify(access_token=access_token, isAdmin=user_from_db['isAdmin']), 200
     return jsonify({'msg': 'The username or password is incorrect'}), 401
 
 
-@app.route("/api/users/<username>", methods=["DELETE"])
+@app.route("/api/users/<username>", methods=["DELETE"]) #should require admin?
 def delete_user(username):
     # Check if the user exists
     user = users_collection.find_one({'username': username})
@@ -202,3 +217,12 @@ def delete_text():
             return jsonify({'msg': 'text not exists on your profile'}), 404
     else:
         return jsonify({'msg': 'Access Token Expired'}), 404
+
+@app.route('/')
+def hello():
+    return "Hello, this is the backend application!"
+
+app.debug=True
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
