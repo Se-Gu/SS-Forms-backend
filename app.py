@@ -6,6 +6,7 @@ import datetime
 import hashlib
 from functools import wraps
 from jwt import decode, InvalidTokenError, ExpiredSignatureError
+from bson.json_util import dumps
 
 app = Flask(__name__)
 CORS(app)
@@ -17,6 +18,8 @@ client = MongoClient('mongodb://mongodb:27017/')
 db = client['user_forms']
 users_collection = db['users']
 texts_collection = db['texts']
+forms_collection = db['forms']
+form_answers_collection = db['form_answers']
 
 def admin_required(f):
     @wraps(f)
@@ -92,11 +95,11 @@ def login():
             # Create JWT Access Token
             access_token = create_access_token(identity=user_from_db['username'])  # create jwt token
             # Return Token and isAdmin status
-            return jsonify(access_token=access_token, isAdmin=user_from_db['isAdmin']), 200
+            return jsonify(access_token=access_token, isAdmin=user_from_db['isAdmin'],username=user_from_db['username']), 200
     return jsonify({'msg': 'The username or password is incorrect'}), 401
 
 
-@app.route("/api/users/<username>", methods=["DELETE"]) #should require admin?
+@app.route("/api/users/<username>", methods=["DELETE"])
 def delete_user(username):
     # Check if the user exists
     user = users_collection.find_one({'username': username})
@@ -221,6 +224,56 @@ def delete_text():
 @app.route('/')
 def hello():
     return "Hello, this is the backend application!"
+
+
+@app.route('/api/forms', methods=['POST'])
+def create_form():
+    form_data = request.get_json()
+
+    # ensure the form data is well formatted
+    if 'title' not in form_data or 'questions' not in form_data or not isinstance(form_data['questions'], list):
+        return jsonify({'msg': 'Invalid form data'}), 400  # Bad Request
+
+    # Insert the form data into the 'forms' collection
+    forms_collection.insert_one(form_data)
+
+    return jsonify({'msg': 'Form created successfully'}), 201
+
+@app.route('/api/getforms', methods=['GET'])
+def get_forms():
+    forms = forms_collection.find()
+    return dumps(forms), 200  # OK
+
+@app.route("/api/forms/<title>", methods=["DELETE"])
+def delete_form(title):
+    # Check if the form exists
+    form = forms_collection.find_one({'title': title})
+    if not form:
+        return jsonify({'msg': 'Form not found'}), 404
+
+    # Delete the form from the 'forms' collection
+    forms_collection.delete_one({'title': title})
+
+    return jsonify({'msg': 'Form deleted successfully'}), 200
+
+@app.route('/api/submit_form', methods=['POST'])
+def submit_form():
+    submission_data = request.get_json()
+
+    # ensure the submission data is well formatted
+    if 'form_title' not in submission_data or 'username' not in submission_data or 'answers' not in submission_data or not isinstance(submission_data['answers'], list):
+        return jsonify({'msg': 'Invalid submission data'}), 400  # Bad Request
+
+    # Insert the submission data into the 'form_answers' collection
+    form_answers_collection.insert_one(submission_data)
+
+    return jsonify({'msg': 'Form submitted successfully'}), 201
+
+@app.route('/api/get_form_answers', methods=['GET'])
+def get_form_answers():
+    # get all documents from the 'form_answers' collection
+    form_answers = form_answers_collection.find()
+    return dumps(form_answers), 200  # OK
 
 app.debug=True
 
