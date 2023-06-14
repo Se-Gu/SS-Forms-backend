@@ -14,7 +14,7 @@ jwt = JWTManager(app)
 app.config['JWT_SECRET_KEY'] = '38dd56f56d405e02ec0ba4be4607eaab'
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = datetime.timedelta(days=1)
 
-client = MongoClient('mongodb://mongodb:27017/')
+client = MongoClient('mongodb+srv://ss-forms:hVue0GPTLC5tGOLP@cluster0.bf3pr6v.mongodb.net/')
 db = client['user_forms']
 users_collection = db['users']
 texts_collection = db['texts']
