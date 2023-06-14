@@ -7,6 +7,8 @@ import hashlib
 from functools import wraps
 from jwt import decode, InvalidTokenError, ExpiredSignatureError
 from bson.json_util import dumps
+from bson.objectid import ObjectId
+import uuid
 
 app = Flask(__name__)
 CORS(app)
@@ -17,22 +19,22 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = datetime.timedelta(days=1)
 client = MongoClient('mongodb+srv://ss-forms:hVue0GPTLC5tGOLP@cluster0.bf3pr6v.mongodb.net/')
 db = client['user_forms']
 users_collection = db['users']
-texts_collection = db['texts']
 forms_collection = db['forms']
-form_answers_collection = db['form_answers']
 
+def user_from_request(request):
+    token = request.headers.get('Authorization').split()[1]
+    payload = decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
+    username = payload['sub']
+    user_from_db = users_collection.find_one({'username': username})
+    return user_from_db
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         # Check if the user is authenticated and has the 'isAdmin' role
         if 'Authorization' in request.headers:
-            token = request.headers.get('Authorization').split()[1]
             try:
-                payload = decode(token, app.config['JWT_SECRET_KEY'], algorithms=['HS256'])
-                username = payload['sub']
-                user_from_db = users_collection.find_one({'username': username})
-                print(type(user_from_db['isAdmin']))
-                if user_from_db and user_from_db['isAdmin'] == 'True':
+                user_from_db = user_from_request(request)
+                if user_from_db and user_from_db['isAdmin']:
                     return f(*args, **kwargs)
                 else:
                     return jsonify(message='Admin access required'), 403  # Forbidden
@@ -114,32 +116,126 @@ def delete_user(username):
 
     return jsonify({'msg': 'User deleted successfully'}), 200
 
+# CRUD operations for the "forms" collection
+@app.route('/api/forms', methods=['POST'])
+@admin_required
+def create_form():
+    # Inserts a new form into the "forms" collection and returns its generated ID
+    form_data = request.get_json()
+    form_id = str(uuid.uuid4())  # Generate a UUID for the form
+    form_data['id'] = form_id
+    forms_collection.insert_one(form_data)
+    return jsonify({'form_id': form_id}), 201
 
-@app.route("/create", methods=["POST"])
+@app.route('/api/forms/<form_id>', methods=['GET'])
+@admin_required
+def get_form(form_id):
+    # Retrieves a form by its ID from the "forms" collection
+    form = forms_collection.find_one({'id': form_id})
+    if form:
+        form_data = dumps(form)
+        return form_data, 200, {'Content-Type': 'application/json'}
+    return jsonify({'msg': 'Form not found'}), 404
+
+@app.route('/api/forms', methods=['GET'])
+@admin_required
+def get_all_forms():
+    # Retrieves all forms from the "forms" collection
+    forms = forms_collection.find()
+    if forms:
+        forms_data = dumps(forms)
+        return forms_data, 200, {'Content-Type': 'application/json'}
+    return jsonify({'msg': 'No forms found'}), 404
+
+@app.route('/api/forms/<form_id>', methods=['PUT'])
+@admin_required
+def update_form(form_id):
+    updated_data = request.get_json()
+    # Updates a form in the "forms" collection with the provided ID
+    forms_collection.update_one({'id': form_id}, {'$set': updated_data})
+    return jsonify({'msg': 'Form updated successfully'})
+
+@app.route('/api/forms/<form_id>', methods=['DELETE'])
+@admin_required
+def delete_form(form_id):
+    # Deletes a form from the "forms" collection with the provided ID
+    forms_collection.delete_one({'id': form_id})
+    return jsonify({'msg': 'Form deleted successfully'})
+
+# CRUD operations for the "formQuestions" field
+@app.route('/api/forms/<form_id>/questions', methods=['POST'])
+@admin_required
+def add_question(form_id):
+    question_data = request.get_json()
+    question_id = str(uuid.uuid4())  # Generate a UUID for the question
+    question_data['id'] = question_id
+    # Adds a new question to the "formQuestions" array within a form
+    forms_collection.update_one({'id': form_id}, {'$push': {'formQuestions': question_data}})
+    return jsonify({'msg': 'Question added successfully'})
+
+@app.route('/api/forms/<form_id>/questions/<question_id>', methods=['PUT'])
+@admin_required
+def update_question(form_id, question_id):
+    updated_data = request.get_json()
+    # Updates a question within the "formQuestions" array of a form
+    forms_collection.update_one({'id': form_id, 'formQuestions.id': question_id},
+                                {'$set': {'formQuestions.$': updated_data}})
+    return jsonify({'msg': 'Question updated successfully'})
+
+@app.route('/api/forms/<form_id>/questions/<question_id>', methods=['DELETE'])
+@admin_required
+def delete_question(form_id, question_id):
+    # Deletes a question from the "formQuestions" array of a form
+    forms_collection.update_one({'id': form_id}, {'$pull': {'formQuestions': {'id': question_id}}})
+    return jsonify({'msg': 'Question deleted successfully'})
+
+# CRUD operations for the "formResponses" field
+@app.route('/api/forms/<form_id>/responses', methods=['POST'])
 @jwt_required()
-def create_text():
-    # Getting the user from access token
-    current_user = get_jwt_identity()  # Get the identity of the current user
-    user_from_db = users_collection.find_one({'username': current_user})
+def add_response(form_id):
+    response_data = request.get_json()
+    question_id = response_data['questionId']
+    answer = response_data['answer']
+    user = user_from_request(request)
+    answer_data = {
+        'id': str(uuid.uuid4()),
+        'userId': user['_id'],
+        'username': user['username'],
+        'answer': answer
+    }
 
-    # Checking if user exists
-    if user_from_db:
-        # Getting the text details from json
-        text_details = request.get_json()  # store the json body request
-        # Viewing if textd already present in collection
-        user_text = {'profile': user_from_db["username"], "text": text_details["text"]}
-        doc = texts_collection.find_one(user_text)  # check if user exist
-        # Creating collection if not exists
+    forms_collection.update_one(
+        {'id': form_id, 'formQuestions.id': question_id},
+        {'$push': {'formQuestions.$.answers': answer_data}}
+    )
 
-        if not doc:
-            texts_collection.insert_one(user_text)
-            print("user_text ", user_text)
-            return jsonify({'msg': 'text created successfully'}), 200
-        # Returning message if text exists
-        else:
-            return jsonify({'msg': 'text already exists on your profile'}), 404
-    else:
-        return jsonify({'msg': 'Access Token Expired'}), 404
+    return jsonify({'msg': 'Response added successfully'})
+
+
+@app.route('/api/forms/<form_id>/responses/<response_id>', methods=['PUT'])
+@jwt_required()
+def update_response(form_id, response_id):
+    updated_data = request.get_json()
+    question_id = updated_data['questionId']
+    answer = updated_data['answer']
+
+    forms_collection.update_one(
+        {'id': form_id, 'formQuestions.id': question_id, 'formQuestions.answers.id': response_id},
+        {'$set': {'formQuestions.$.answers.$.answer': answer}}
+    )
+
+    return jsonify({'msg': 'Response updated successfully'})
+
+
+@app.route('/api/forms/<form_id>/responses/<response_id>', methods=['DELETE'])
+@jwt_required()
+def delete_response(form_id, response_id):
+    forms_collection.update_one(
+        {'id': form_id, 'formQuestions.answers.id': response_id},
+        {'$pull': {'formQuestions.$.answers': {'id': response_id}}}
+    )
+
+    return jsonify({'msg': 'Response deleted successfully'})
 
 
 @app.route("/api/admin_only")
@@ -149,131 +245,11 @@ def admin_only_route():
     return jsonify(message='Admin-only endpoint')
 
 
-@app.route("/get", methods=["GET"])
-@jwt_required()
-def get_text():
-    # Getting the user from access token
-    current_user = get_jwt_identity()  # Get the identity of the current user
-    user_from_db = users_collection.find_one({'username': current_user})
-    # Checking if user exists
-    if user_from_db:
-        # Viewing if textd already present in collection
-        user_text = {'profile': user_from_db["username"]}
-        return jsonify({"docs": list(db.texts.find(user_text, {"_id": 0}))}), 200
-    else:
-        return jsonify({'msg': 'Access Token Expired'}), 404
-
-
-@app.route("/update", methods=["POST"])
-@jwt_required()
-def update_text():
-    # Getting the user from access token
-    current_user = get_jwt_identity()  # Get the identity of the current user
-    user_from_db = users_collection.find_one({'username': current_user})
-
-    # Checking if user exists
-    if user_from_db:
-        # Getting the text details from json
-        text_details = request.get_json()  # store the json body request
-        # Viewing if textd already present in collection
-        user_text = {'profile': user_from_db["username"], "text": text_details["old_text"]}
-        doc = texts_collection.find_one(user_text)  # check if user exist
-        # Updating collection if not exists
-
-        if doc:
-            doc["text"] = text_details["new_text"]
-            texts_collection.update_one(user_text, {"$set": {"text": doc["text"]}}, upsert=False)
-            return jsonify({'msg': 'text Updated successfully'}), 200
-        # Returning message if text exists
-        else:
-            return jsonify({'msg': 'text not exists on your profile'}), 404
-    else:
-        return jsonify({'msg': 'Access Token Expired'}), 404
-
-
-@app.route("/delete", methods=["POST"])
-@jwt_required()
-def delete_text():
-    """Creating the text with respect to the user
-    Returns:
-        dict: Return the profile and text created
-    """
-    # Getting the user from access token
-    current_user = get_jwt_identity()  # Get the identity of the current user
-    user_from_db = users_collection.find_one({'username': current_user})
-
-    # Checking if user exists
-    if user_from_db:
-        # Getting the text details from json
-        text_details = request.get_json()  # store the json body request
-        # Viewing if textd already present in collection
-        user_text = {'profile': user_from_db["username"], "text": text_details["text"]}
-        doc = texts_collection.find_one(user_text)  # check if user exist
-        # Creating collection if not exists
-
-        if doc:
-            texts_collection.delete_one(user_text)
-            print("user_text ", user_text)
-            return jsonify({'msg': 'text Deleted Sucessfully'}), 404
-        # Returning message if text exists
-        else:
-            return jsonify({'msg': 'text not exists on your profile'}), 404
-    else:
-        return jsonify({'msg': 'Access Token Expired'}), 404
-
 @app.route('/')
 def hello():
     return "Hello, this is the backend application!"
 
 
-@app.route('/api/forms', methods=['POST'])
-def create_form():
-    form_data = request.get_json()
-
-    # ensure the form data is well formatted
-    if 'title' not in form_data or 'questions' not in form_data or not isinstance(form_data['questions'], list):
-        return jsonify({'msg': 'Invalid form data'}), 400  # Bad Request
-
-    # Insert the form data into the 'forms' collection
-    forms_collection.insert_one(form_data)
-
-    return jsonify({'msg': 'Form created successfully'}), 201
-
-@app.route('/api/getforms', methods=['GET'])
-def get_forms():
-    forms = forms_collection.find()
-    return dumps(forms), 200  # OK
-
-@app.route("/api/forms/<title>", methods=["DELETE"])
-def delete_form(title):
-    # Check if the form exists
-    form = forms_collection.find_one({'title': title})
-    if not form:
-        return jsonify({'msg': 'Form not found'}), 404
-
-    # Delete the form from the 'forms' collection
-    forms_collection.delete_one({'title': title})
-
-    return jsonify({'msg': 'Form deleted successfully'}), 200
-
-@app.route('/api/submit_form', methods=['POST'])
-def submit_form():
-    submission_data = request.get_json()
-
-    # ensure the submission data is well formatted
-    if 'form_title' not in submission_data or 'username' not in submission_data or 'answers' not in submission_data or not isinstance(submission_data['answers'], list):
-        return jsonify({'msg': 'Invalid submission data'}), 400  # Bad Request
-
-    # Insert the submission data into the 'form_answers' collection
-    form_answers_collection.insert_one(submission_data)
-
-    return jsonify({'msg': 'Form submitted successfully'}), 201
-
-@app.route('/api/get_form_answers', methods=['GET'])
-def get_form_answers():
-    # get all documents from the 'form_answers' collection
-    form_answers = form_answers_collection.find()
-    return dumps(form_answers), 200  # OK
 
 app.debug=True
 
