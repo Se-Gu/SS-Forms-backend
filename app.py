@@ -122,10 +122,14 @@ def delete_user(username):
 def create_form():
     # Inserts a new form into the "forms" collection and returns its generated ID
     form_data = request.get_json()
-    form_id = str(uuid.uuid4())  # Generate a UUID for the form
-    form_data['id'] = form_id
-    forms_collection.insert_one(form_data)
-    return jsonify({'form_id': form_id}), 201
+    form = forms_collection.find_one({'formName': form_data['formName']})
+    if form:
+        return jsonify({'msg': 'Form with name already exists'}), 404
+    else:
+        form_id = str(uuid.uuid4())  # Generate a UUID for the form
+        form_data['id'] = form_id
+        forms_collection.insert_one(form_data)
+        return jsonify({'msg': 'Form creation successful'}), 201
 
 @app.route('/api/forms/<form_id>', methods=['GET'])
 @admin_required
@@ -138,7 +142,6 @@ def get_form(form_id):
     return jsonify({'msg': 'Form not found'}), 404
 
 @app.route('/api/forms', methods=['GET'])
-@admin_required
 def get_all_forms():
     # Retrieves all forms from the "forms" collection
     forms = forms_collection.find()
@@ -194,20 +197,21 @@ def delete_question(form_id, question_id):
 @jwt_required()
 def add_response(form_id):
     response_data = request.get_json()
-    question_id = response_data['questionId']
-    answer = response_data['answer']
     user = user_from_request(request)
-    answer_data = {
-        'id': str(uuid.uuid4()),
-        'userId': user['_id'],
-        'username': user['username'],
-        'answer': answer
-    }
+    for answer_data in response_data:
+        question_id = answer_data['questionId']
+        answer = answer_data['answer']
+        answer_data = {
+            'id': str(uuid.uuid4()),
+            'userId': user['_id'],
+            'username': user['username'],
+            'answer': answer
+        }
 
-    forms_collection.update_one(
-        {'id': form_id, 'formQuestions.id': question_id},
-        {'$push': {'formQuestions.$.answers': answer_data}}
-    )
+        forms_collection.update_one(
+            {'id': form_id, 'formQuestions.id': question_id},
+            {'$push': {'formQuestions.$.answers': answer_data}}
+        )
 
     return jsonify({'msg': 'Response added successfully'})
 
