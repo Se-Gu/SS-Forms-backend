@@ -145,6 +145,7 @@ def get_form(form_id):
 def get_all_forms():
     # Retrieves all forms from the "forms" collection
     forms = forms_collection.find()
+    #print(dumps(forms))
     if forms:
         forms_data = dumps(forms)
         return forms_data, 200, {'Content-Type': 'application/json'}
@@ -154,6 +155,7 @@ def get_all_forms():
 @admin_required
 def update_form(form_id):
     updated_data = request.get_json()
+    print(updated_data)
     # Updates a form in the "forms" collection with the provided ID
     forms_collection.update_one({'id': form_id}, {'$set': updated_data})
     return jsonify({'msg': 'Form updated successfully'})
@@ -198,8 +200,10 @@ def delete_question(form_id, question_id):
 def add_response(form_id):
     response_data = request.get_json()
     user = user_from_request(request)
+    updated = False
     for answer_data in response_data:
         question_id = answer_data['questionId']
+        print(question_id)
         answer = answer_data['answer']
         answer_data = {
             'id': str(uuid.uuid4()),
@@ -208,12 +212,41 @@ def add_response(form_id):
             'answer': answer
         }
 
-        forms_collection.update_one(
-            {'id': form_id, 'formQuestions.id': question_id},
-            {'$push': {'formQuestions.$.answers': answer_data}}
+        existing_answer = forms_collection.find_one(
+            {
+                'id': form_id,
+                'formQuestions': {
+                    '$elemMatch': {
+                        'id': question_id,
+                        'answers': {
+                            '$elemMatch': {
+                                'userId': user['_id']
+                            }
+                        }
+                    }
+                }
+            },
+            {'formQuestions.$': 1}
         )
 
-    return jsonify({'msg': 'Response added successfully'})
+        if existing_answer:
+            #print(answer_data)
+            print(existing_answer)
+            updated = True
+            forms_collection.update_one(
+                {'id': form_id, 'formQuestions.id': question_id, 'formQuestions.answers.userId': user['_id']},
+                {'$set': {'formQuestions.$.answers.$[elem].answer': answer}},
+                array_filters=[{'elem.userId': user['_id']}]
+            )
+        else:
+            forms_collection.update_one(
+                {'id': form_id, 'formQuestions.id': question_id},
+                {'$push': {'formQuestions.$.answers': answer_data}}
+            )
+    if not updated:
+        return jsonify({'msg': 'Response added successfully'})
+    else:
+        return jsonify({'msg': 'Response updated successfully'})
 
 
 @app.route('/api/forms/<form_id>/responses/<response_id>', methods=['PUT'])
