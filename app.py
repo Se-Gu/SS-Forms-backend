@@ -204,7 +204,7 @@ def add_response(form_id):
     for answer_data in response_data:
         question_id = answer_data['questionId']
         print(question_id)
-        answer = answer_data['answer']
+        answer = answer_data.get('answer', None)
         answer_data = {
             'id': str(uuid.uuid4()),
             'userId': user['_id'],
